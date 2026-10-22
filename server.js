@@ -6,59 +6,94 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
-const players = {};
+const rooms = {};
 
 io.on('connection', (socket) => {
-  // Cria o jogador na sala
-  players[socket.id] = {
-    x: Math.random() * 10 - 5,
-    z: Math.random() * 10 - 5,
-    yaw: 0,
-    health: 100,
-    kills: 0
-  };
+  socket.on('joinRoom', (data) => {
+    const roomId = data.roomId;
+    const username = data.username;
 
-  io.emit('updatePlayers', players);
+    socket.join(roomId);
 
-  // Movimento
+    if (!rooms[roomId]) {
+      rooms[roomId] = { players: {}, bots: [] };
+      
+      // Se a sala for criada e for "contra bots", preenche com bots
+      if (data.mode === 'bots') {
+        for(let i=0; i<5; i++) {
+          rooms[roomId].bots.push({
+            id: 'bot_' + i,
+            x: Math.random() * 40 - 20,
+            z: Math.random() * 40 - 20,
+            yaw: 0,
+            health: 100,
+            alive: true
+          });
+        }
+      }
+    }
+
+    // Adiciona o jogador
+    rooms[roomId].players[socket.id] = {
+      username: username,
+      x: Math.random() * 10 - 5,
+      z: Math.random() * 10 - 5,
+      yaw: 0,
+      health: 100,
+      kills: 0
+    };
+
+    socket.roomId = roomId;
+    io.to(roomId).emit('updateRoom', rooms[roomId]);
+  });
+
   socket.on('move', (data) => {
-    if (players[socket.id]) {
-      players[socket.id].x = data.x;
-      players[socket.id].z = data.z;
-      players[socket.id].yaw = data.yaw;
-      socket.broadcast.emit('playerMoved', { id: socket.id, data: players[socket.id] });
+    const room = rooms[socket.roomId];
+    if (room && room.players[socket.id]) {
+      room.players[socket.id].x = data.x;
+      room.players[socket.id].z = data.z;
+      room.players[socket.id].yaw = data.yaw;
+      socket.to(socket.roomId).emit('playerMoved', { id: socket.id, data: room.players[socket.id] });
     }
   });
 
-  // Tiro (Dano no outro jogador)
   socket.on('shoot', (data) => {
-    const targetId = data.target;
-    if (players[targetId]) {
-      players[targetId].health -= 25; // Tira 25 de vida
-      
-      // Se morrer, reseta a vida e dá kill pro atirador
-      if (players[targetId].health <= 0) {
-        players[targetId].health = 100;
-        players[targetId].x = Math.random() * 10 - 5;
-        players[targetId].z = Math.random() * 10 - 5;
-        if(players[socket.id]) players[socket.id].kills++;
-      }
+    const room = rooms[socket.roomId];
+    if (!room) return;
 
-      // Avisa todo mundo sobre o dano
-      io.emit('playerHit', { 
-        id: targetId, 
-        health: players[targetId].health,
-        killer: socket.id,
-        killerKills: players[socket.id] ? players[socket.id].kills : 0
-      });
-      
-      io.emit('updatePlayers', players);
+    // Se atirou em um jogador
+    if (data.targetType === 'player' && room.players[data.targetId]) {
+      room.players[data.targetId].health -= 25;
+      if (room.players[data.targetId].health <= 0) {
+        room.players[data.targetId].health = 100;
+        room.players[data.targetId].x = Math.random() * 10 - 5;
+        room.players[data.targetId].z = Math.random() * 10 - 5;
+        if(room.players[socket.id]) room.players[socket.id].kills++;
+      }
+      io.to(socket.roomId).emit('playerHit', { id: data.targetId, health: room.players[data.targetId].health, killer: socket.id });
+      io.to(socket.roomId).emit('updateRoom', room);
+    }
+    
+    // Se atirou em um bot
+    if (data.targetType === 'bot') {
+      const bot = room.bots.find(b => b.id === data.targetId);
+      if (bot && bot.alive) {
+        bot.health -= 35;
+        if (bot.health <= 0) {
+          bot.alive = false;
+          if(room.players[socket.id]) room.players[socket.id].kills++;
+        }
+        io.to(socket.roomId).emit('updateRoom', room);
+      }
     }
   });
 
   socket.on('disconnect', () => {
-    delete players[socket.id];
-    io.emit('updatePlayers', players);
+    if (socket.roomId && rooms[socket.roomId]) {
+      delete rooms[socket.roomId].players[socket.id];
+      io.to(socket.roomId).emit('updateRoom', rooms[socket.roomId]);
+      if (Object.keys(rooms[socket.roomId].players).length === 0) delete rooms[socket.roomId];
+    }
   });
 });
 
