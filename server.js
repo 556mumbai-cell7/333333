@@ -11,36 +11,21 @@ const rooms = {};
 io.on('connection', (socket) => {
   socket.on('joinRoom', (data) => {
     const roomId = data.roomId;
-    const username = data.username;
-
     socket.join(roomId);
 
     if (!rooms[roomId]) {
       rooms[roomId] = { players: {}, bots: [] };
-      
-      // Se a sala for criada e for "contra bots", preenche com bots
       if (data.mode === 'bots') {
-        for(let i=0; i<5; i++) {
+        for(let i=0; i<8; i++) {
           rooms[roomId].bots.push({
-            id: 'bot_' + i,
-            x: Math.random() * 40 - 20,
-            z: Math.random() * 40 - 20,
-            yaw: 0,
-            health: 100,
-            alive: true
+            id: 'bot_' + i, x: Math.random() * 40 - 20, z: Math.random() * 40 - 20, yaw: 0, health: 100, alive: true
           });
         }
       }
     }
 
-    // Adiciona o jogador
     rooms[roomId].players[socket.id] = {
-      username: username,
-      x: Math.random() * 10 - 5,
-      z: Math.random() * 10 - 5,
-      yaw: 0,
-      health: 100,
-      kills: 0
+      username: data.username, x: Math.random() * 10 - 5, z: Math.random() * 10 - 5, yaw: 0, health: 100, kills: 0
     };
 
     socket.roomId = roomId;
@@ -61,28 +46,26 @@ io.on('connection', (socket) => {
     const room = rooms[socket.roomId];
     if (!room) return;
 
-    // Se atirou em um jogador
     if (data.targetType === 'player' && room.players[data.targetId]) {
       room.players[data.targetId].health -= 25;
+      
       if (room.players[data.targetId].health <= 0) {
         room.players[data.targetId].health = 100;
         room.players[data.targetId].x = Math.random() * 10 - 5;
         room.players[data.targetId].z = Math.random() * 10 - 5;
         if(room.players[socket.id]) room.players[socket.id].kills++;
+        io.to(data.targetId).emit('died', { killer: room.players[socket.id].username });
       }
-      io.to(socket.roomId).emit('playerHit', { id: data.targetId, health: room.players[data.targetId].health, killer: socket.id });
+
+      io.to(socket.roomId).emit('playerHit', { id: data.targetId, health: room.players[data.targetId].health, killerId: socket.id });
       io.to(socket.roomId).emit('updateRoom', room);
     }
     
-    // Se atirou em um bot
     if (data.targetType === 'bot') {
       const bot = room.bots.find(b => b.id === data.targetId);
       if (bot && bot.alive) {
         bot.health -= 35;
-        if (bot.health <= 0) {
-          bot.alive = false;
-          if(room.players[socket.id]) room.players[socket.id].kills++;
-        }
+        if (bot.health <= 0) { bot.alive = false; if(room.players[socket.id]) room.players[socket.id].kills++; }
         io.to(socket.roomId).emit('updateRoom', room);
       }
     }
