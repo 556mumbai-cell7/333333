@@ -25,7 +25,7 @@ io.on('connection', (socket) => {
     }
 
     rooms[roomId].players[socket.id] = {
-      username: data.username, x: Math.random() * 10 - 5, z: Math.random() * 10 - 5, yaw: 0, health: 100, kills: 0
+      username: data.username, x: Math.random() * 10 - 5, z: Math.random() * 10 - 5, yaw: 0, health: 100, kills: 0, skin: data.skin || 'Default'
     };
 
     socket.roomId = roomId;
@@ -54,7 +54,11 @@ io.on('connection', (socket) => {
         room.players[data.targetId].x = Math.random() * 10 - 5;
         room.players[data.targetId].z = Math.random() * 10 - 5;
         if(room.players[socket.id]) room.players[socket.id].kills++;
+        
+        // Avisa o alvo que ele morreu (e que ganhou 100 diamantes no front-end)
         io.to(data.targetId).emit('died', { killer: room.players[socket.id].username });
+        // Avisa o matador que ele matou
+        io.to(socket.id).emit('killedSomeone', { victim: room.players[data.targetId].username });
       }
 
       io.to(socket.roomId).emit('playerHit', { id: data.targetId, health: room.players[data.targetId].health, killerId: socket.id });
@@ -65,7 +69,11 @@ io.on('connection', (socket) => {
       const bot = room.bots.find(b => b.id === data.targetId);
       if (bot && bot.alive) {
         bot.health -= 35;
-        if (bot.health <= 0) { bot.alive = false; if(room.players[socket.id]) room.players[socket.id].kills++; }
+        if (bot.health <= 0) { 
+          bot.alive = false; 
+          if(room.players[socket.id]) room.players[socket.id].kills++; 
+          io.to(socket.id).emit('killedSomeone', { victim: 'Bot' });
+        }
         io.to(socket.roomId).emit('updateRoom', room);
       }
     }
