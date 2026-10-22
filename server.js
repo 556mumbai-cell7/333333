@@ -4,28 +4,23 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: "*" }
-});
+const io = new Server(server, { cors: { origin: "*" } });
 
 const players = {};
 
 io.on('connection', (socket) => {
-  console.log('Jogador conectado:', socket.id);
-
-  // Quando o jogador entra, cria o boneco dele
+  // Cria o jogador na sala
   players[socket.id] = {
-    x: Math.random() * 20 - 10,
-    z: Math.random() * 20 - 10,
+    x: Math.random() * 10 - 5,
+    z: Math.random() * 10 - 5,
     yaw: 0,
     health: 100,
     kills: 0
   };
 
-  // Manda a lista de jogadores para todo mundo
   io.emit('updatePlayers', players);
 
-  // Recebe movimento e atira para os outros
+  // Movimento
   socket.on('move', (data) => {
     if (players[socket.id]) {
       players[socket.id].x = data.x;
@@ -35,18 +30,37 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Tiro (Dano no outro jogador)
   socket.on('shoot', (data) => {
-    socket.broadcast.emit('playerShot', { id: socket.id, target: data.target });
+    const targetId = data.target;
+    if (players[targetId]) {
+      players[targetId].health -= 25; // Tira 25 de vida
+      
+      // Se morrer, reseta a vida e dá kill pro atirador
+      if (players[targetId].health <= 0) {
+        players[targetId].health = 100;
+        players[targetId].x = Math.random() * 10 - 5;
+        players[targetId].z = Math.random() * 10 - 5;
+        if(players[socket.id]) players[socket.id].kills++;
+      }
+
+      // Avisa todo mundo sobre o dano
+      io.emit('playerHit', { 
+        id: targetId, 
+        health: players[targetId].health,
+        killer: socket.id,
+        killerKills: players[socket.id] ? players[socket.id].kills : 0
+      });
+      
+      io.emit('updatePlayers', players);
+    }
   });
 
   socket.on('disconnect', () => {
-    console.log('Jogador saiu:', socket.id);
     delete players[socket.id];
     io.emit('updatePlayers', players);
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
