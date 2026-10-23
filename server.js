@@ -14,19 +14,25 @@ io.on('connection', (socket) => {
     socket.join(roomId);
 
     if (!rooms[roomId]) {
-      rooms[roomId] = { players: {}, bots: [] };
+      rooms[roomId] = { players: {}, bots: [], lastBotUpdate: Date.now() };
       if (data.mode === 'bots' || data.mode === 'br') {
-        const numBots = data.mode === 'br' ? 15 : 5;
+        const numBots = data.mode === 'br' ? 10 : 5;
         for(let i=0; i<numBots; i++) {
           rooms[roomId].bots.push({
-            id: 'bot_' + i, x: Math.random() * 80 - 40, z: Math.random() * 80 - 40, yaw: 0, health: 100, alive: true
+            id: 'bot_' + i, 
+            x: Math.random() * 80 - 40, 
+            z: Math.random() * 80 - 40, 
+            yaw: 0, 
+            health: 100, 
+            alive: true,
+            shootCooldown: 0
           });
         }
       }
     }
 
     rooms[roomId].players[socket.id] = {
-      username: data.username, x: Math.random() * 10 - 5, z: Math.random() * 10 - 5, yaw: 0, health: 100, kills: 0, skin: data.skin || 'Default'
+      username: data.username, x: 0, z: 0, yaw: 0, health: 100, kills: 0, skin: data.skin || 'Default'
     };
 
     socket.roomId = roomId;
@@ -46,55 +52,57 @@ io.on('connection', (socket) => {
   socket.on('shoot', (data) => {
     const room = rooms[socket.roomId];
     if (!room) return;
+    const shooter = room.players[socket.id];
+    if (!shooter) return;
 
-    // Se acertou um jogador
+    // Tiro em jogador
     if (data.targetType === 'player' && room.players[data.targetId]) {
-      room.players[data.targetId].health -= 25;
-      
-      if (room.players[data.targetId].health <= 0) {
-        room.players[data.targetId].health = 100;
-        room.players[data.targetId].x = Math.random() * 10 - 5;
-        room.players[data.targetId].z = Math.random() * 10 - 5;
-        
-        if(room.players[socket.id]) {
-          room.players[socket.id].kills++;
-          
-          // SE CHEGAR A 10 KILLS, É VITÓRIA!
-          if (room.players[socket.id].kills >= 10) {
-            io.to(socket.roomId).emit('gameOver', { winner: room.players[socket.id].username, id: socket.id });
-            delete rooms[socket.roomId]; // Limpa a sala
-            return;
-          }
-        }
-        
-        io.to(data.targetId).emit('died', { killer: room.players[socket.id].username });
+      const target = room.players[data.targetId];
+      target.health -= 25;
+      if (target.health <= 0) {
+        target.health = 100; target.x = 0; target.z = 0;
+        shooter.kills++;
+        io.to(data.targetId).emit('died', { killer: shooter.username });
+        checkWin(room, socket.id);
       }
-
-      io.to(socket.roomId).emit('playerHit', { id: data.targetId, health: room.players[data.targetId].health, killerId: socket.id });
+      io.to(socket.roomId).emit('playerHit', { id: data.targetId, health: target.health, killerId: socket.id });
       io.to(socket.roomId).emit('updateRoom', room);
     }
     
-    // Se acertou um bot
+    // Tiro em bot
     if (data.targetType === 'bot') {
       const bot = room.bots.find(b => b.id === data.targetId);
       if (bot && bot.alive) {
         bot.health -= 35;
-        if (bot.health <= 0) { 
-          bot.alive = false; 
-          if(room.players[socket.id]) {
-            room.players[socket.id].kills++; 
-            // SE CHEGAR A 10 KILLS NO BOT, TAMBÉM É VITÓRIA
-            if (room.players[socket.id].kills >= 10) {
-              io.to(socket.roomId).emit('gameOver', { winner: room.players[socket.id].username, id: socket.id });
-              delete rooms[socket.roomId];
-              return;
-            }
-          }
-        }
+        if (bot.health <= 0) { bot.alive = false; shooter.kills++; checkWin(room, socket.id); }
         io.to(socket.roomId).emit('updateRoom', room);
       }
     }
   });
+
+  // Bots atacando jogadores
+  socket.on('botAttack', (data) => {
+    const room = rooms[socket.roomId];
+    if (!room) return;
+    const bot = room.bots.find(b => b.id === data.botId);
+    const player = room.players[data.playerId];
+    if (bot && bot.alive && player) {
+      player.health -= 10; // Dano do bot
+      io.to(socket.roomId).emit('playerHit', { id: data.playerId, health: player.health, killerId: bot.id });
+      if (player.health <= 0) {
+        player.health = 100; player.x = 0; player.z = 0;
+        io.to(data.playerId).emit('died', { killer: 'Bot' });
+      }
+      io.to(socket.roomId).emit('updateRoom', room);
+    }
+  });
+
+  function checkWin(room, socketId) {
+    if (room.players[socketId] && room.players[socketId].kills >= 10) {
+      io.to(socketId).emit('gameOver', { winner: room.players[socketId].username, id: socketId });
+      delete rooms[socketId];
+    }
+  }
 
   socket.on('disconnect', () => {
     if (socket.roomId && rooms[socket.roomId]) {
